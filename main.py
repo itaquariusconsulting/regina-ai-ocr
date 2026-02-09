@@ -20,9 +20,6 @@ from app.config import INPUT_FOLDER, PROCESSED_FOLDER, ERROR_FOLDER, SUPPORTED_E
 
 app = FastAPI()
 
-# -------------------------------
-# CORS
-# -------------------------------
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -31,17 +28,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# -------------------------------
-# Dependencias
-# -------------------------------
 image_handler = ImageHandler()
 extractor = DataExtractor()
 client = BackendClient()
 
 
-# -------------------------------
-# Utilidades
-# -------------------------------
 def ensure_folders():
     for folder in (INPUT_FOLDER, PROCESSED_FOLDER, ERROR_FOLDER):
         os.makedirs(folder, exist_ok=True)
@@ -51,9 +42,6 @@ def extension_supported(filename: str) -> bool:
     return filename.lower().endswith(tuple(SUPPORTED_EXTENSIONS))
 
 
-# -------------------------------
-# Pipeline común
-# -------------------------------
 def process_file(path: str) -> ScannedDocument:
 
     file_input, is_pdf = image_handler.load_image(path)
@@ -70,29 +58,29 @@ def process_file(path: str) -> ScannedDocument:
         except:
             pass
 
-    amount_text = str(data.get("amount") or "")
-
     doc = ScannedDocument(
         documentType=data.get("documentType"),
         documentNumber=data.get("documentNumber"),
+        documentCurrency=data.get("documentCurrency"),
         documentDate=data.get("documentDate"),
-        issuerRuc=data.get("issuerRuc"),
+        issuerRuc=data.get("issuerRuc") or [],
+        issuerName=data.get("issuerName"),
         issuerAddress=data.get("issuerAddress"),
-        amount=data.get("amount"),
+        amount=data.get("amount") or 0.0,
+        items=data.get("items") or [],
         imageBase64=preview_image_b64
     )
 
     return doc
 
 
-# -------------------------------
-# Lógica batch
-# -------------------------------
 def main():
 
     print("Iniciando proceso de OCR en batch...")
 
     ensure_folders()
+
+    rucs_detectados = []
 
     files = [
         f for f in glob.glob(os.path.join(INPUT_FOLDER, "*"))
@@ -108,6 +96,8 @@ def main():
 
         try:
             doc = process_file(file_path)
+
+            rucs_detectados.extend(doc.issuerRuc)
 
             if not doc.is_valid():
                 print("   [SKIP] Datos inválidos (Faltan Monto o RUC)")
@@ -129,21 +119,18 @@ def main():
             except Exception as move_error:
                 print(f"   [MOVE ERROR] {filename}: {move_error}")
 
+    return rucs_detectados
 
-# -------------------------------
-# Endpoint batch
-# -------------------------------
+
 @app.post("/ocr/run-batch")
 def run_batch():
-    main()
-    return {"status": "ok"}
+    rucs = main()
+    return {
+        "status": "ok",
+        "rucs": rucs
+    }
 
 
-# -------------------------------
-# Endpoint para Angular / móvil
-# Devuelve siempre los datos detectados
-# Solo guarda si es válido
-# -------------------------------
 @app.post("/ocr/scan")
 async def scan_from_front(file: UploadFile = File(...)):
 
@@ -173,10 +160,13 @@ async def scan_from_front(file: UploadFile = File(...)):
             "detectedData": {
                 "documentType": doc.documentType,
                 "documentNumber": doc.documentNumber,
+                "documentCurrency": doc.documentCurrency,
                 "documentDate": doc.documentDate,
                 "issuerRuc": doc.issuerRuc,
+                "issuerName": doc.issuerName,
                 "issuerAddress": doc.issuerAddress,
-                "amount": doc.amount
+                "amount": doc.amount,
+                "items": doc.items
             },
             "imageBase64": doc.imageBase64
         }
@@ -210,8 +200,5 @@ async def scan_from_front(file: UploadFile = File(...)):
                 pass
 
 
-# -------------------------------
-# Arranque
-# -------------------------------
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=6701, reload=True)
