@@ -32,15 +32,12 @@ image_handler = ImageHandler()
 extractor = DataExtractor()
 client = BackendClient()
 
-
 def ensure_folders():
     for folder in (INPUT_FOLDER, PROCESSED_FOLDER, ERROR_FOLDER):
         os.makedirs(folder, exist_ok=True)
 
-
 def extension_supported(filename: str) -> bool:
     return filename.lower().endswith(tuple(SUPPORTED_EXTENSIONS))
-
 
 def process_file(path: str) -> ScannedDocument:
 
