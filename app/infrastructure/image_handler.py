@@ -50,7 +50,7 @@ class ImageHandler:
         processed_img = self._preprocess_for_ocr(pil_image)
 
         print("🔍 Running OCR...")
-        return pytesseract.image_to_string(processed_img, config="--psm 3")
+        return pytesseract.image_to_string(processed_img, config="--psm 6")
 
     # ---- CORREGIDO (sin staticmethod y sin self duplicado)
     def _preprocess_for_ocr(self, pil_image: Image.Image) -> np.ndarray:
@@ -76,7 +76,7 @@ class ImageHandler:
         if is_pdf:
             images = convert_from_path(
                 file_input,
-                dpi=200,
+                dpi=300,
                 poppler_path=r"C:\poppler\Library\bin"
             )
             pil_image = images[0]
