@@ -9,6 +9,7 @@ class ScannedDocument:
     issuerAddress: str
     amount: float
     imageBase64: str
+    rawText: str
 
     def to_dict(self):
         return asdict(self)
