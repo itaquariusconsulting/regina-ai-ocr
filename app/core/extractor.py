@@ -100,31 +100,35 @@ class DataExtractor:
     # -------------------------------------------------
     @staticmethod
     def _extract_issuer_name(text: str) -> str | None:
-
         if not text:
             return None
 
         lines = [l.strip() for l in text.splitlines() if l.strip()]
         top_lines = lines[:12]
 
-        blacklist = (
-            "FACTURA", "BOLETA", "NOTA", "RUC", "FECHA",
-            "CLIENTE", "SEÑOR", "SEÑORES", "DNI",
-            "TOTAL", "IMPORTE", "GUIA", "MONEDA"
-        )
+        junk_patterns = [
+            r'(?i)FACTURA\s*ELECTR[OÓ]NICA',
+            r'(?i)BOLETA\s*ELECTR[OÓ]NICA',
+            r'(?i)RUC\s*[:\-]?\s*\d+',
+            r'(?i)TEL[EÉ]F[OÓ]NO.*',
+            r'(?i)P[AÁ]GINA\s*\d+.*'
+        ]
+
+        stop_keywords = ("SEÑOR", "CLIENTE", "DIRECCIÓN", "DOMICILIO")
 
         for line in top_lines:
-
             up = line.upper()
 
-            if any(k in up for k in blacklist):
-                continue
+            if any(k in up for k in stop_keywords):
+                break
 
-            if len(line) < 5:
-                continue
+            current_candidate = line
+            for pattern in junk_patterns:
+                current_candidate = re.sub(pattern, '', current_candidate).strip()
 
-            if re.search(r'[A-ZÁÉÍÓÚÑ]', up):
-                return line.strip()
+            if len(current_candidate) > 4:
+                if not re.search(r'(?i)\b(AV|JR|CALLE|URB|MZ|LT)\b', current_candidate):
+                    return current_candidate.strip()
 
         return None
 
