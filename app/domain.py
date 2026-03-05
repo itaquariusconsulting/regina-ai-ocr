@@ -20,6 +20,7 @@ class ScannedDocument:
     items: List[Dict]
 
     imageBase64: str
+    rawText: str
 
     def to_dict(self):
         return asdict(self)
