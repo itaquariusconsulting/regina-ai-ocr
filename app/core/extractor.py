@@ -183,9 +183,9 @@ class DataExtractor:
         if not ruc or not ruc.isdigit() or len(ruc) != 11:
             return False
 
-        valid_prefixes = ("10", "15", "16", "17", "20")
-        if ruc[:2] not in valid_prefixes:
-            return False
+        #valid_prefixes = ("10", "15", "16", "17", "20")
+        #if ruc[:2] not in valid_prefixes:
+        #    return False
 
         factores = [5, 4, 3, 2, 7, 6, 5, 4, 3, 2]
         suma = sum(int(ruc[i]) * factores[i] for i in range(10))
