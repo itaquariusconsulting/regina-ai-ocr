@@ -16,30 +16,31 @@ class DataExtractor:
         in_table = False
 
         header_re = re.compile(
-            r'(CANT|UND|CODIGO|DESCRIP)',
+            r'(CANT|UND|CODIGO|COD|DESCRIP|DETALLE|ITEM|PRECIO|UNITARIO|VALOR|TOTAL).*(CANT|UND|CODIGO|COD|DESCRIP|DETALLE|ITEM|PRECIO|UNITARIO|VALOR|TOTAL)',
             re.IGNORECASE
         )
-        print("Patron :", header_re)
 
         stop_re = re.compile(
             r'\b(SUBTOTAL|TOTAL|IGV|IMPORTE|SON:)\b',
             re.IGNORECASE
         )
 
+        # patrón original
         row_re = re.compile(
-            r'^(\d+(?:[.,]\d+)?)\s+'        # cantidad
-            r'([A-Z]{1,5})\s+'              # unidad
-            r'(\d+)\s+'                     # codigo
-            r'(.+?)\s+'                     # descripcion
-            r'[S\$\/]*\s*(\d+(?:[.,]\d+)?)\s+'   # precio unitario
-            r'(\d+(?:[.,]\d+)?)$',          # valor item
+            r'(\d+(?:[.,]\d+)?)\s+([\d.,]+)\s+([\d.,]+)$',
             re.IGNORECASE
+        )
+
+        # patrón flexible OCR
+        fallback_re = re.compile(
+            r'(.+?)\s+(\d+(?:[.,]\d+)?)\s+(\d+(?:[.,]\d+)?)$'
         )
 
         for line in lines:
 
-            # limpieza OCR
             line = line.replace("|", " ")
+            line = line.replace("$", "")
+            line = line.replace("S/", "")
             line = re.sub(r'\s{2,}', ' ', line).strip()
 
             up = line.upper()
@@ -57,14 +58,59 @@ class DataExtractor:
             if m:
 
                 cantidad = m.group(1)
-                unidad = m.group(2)
-                codigo = m.group(3)
-                descripcion = m.group(4)
+                precio = m.group(2)
+                total = m.group(3)
+
+                descripcion = ""
+                if items:
+                    descripcion = items[-1]["Descripción"]
                 precio = m.group(5)
                 total = m.group(6)
 
                 items.append({
-                    "Cantidad": float(cantidad.replace(",", ".")),
+                    "Cantidad": float(cantidad.replace(",", "")),
+                    "Unidad": "",
+                    "Código": "",
+                    "Descripción": descripcion,
+                    "Precio Unitario": float(precio.replace(",", "")),
+                    "Valor": float(total.replace(",", ""))
+                })
+
+                continue
+
+            # fallback OCR
+            m2 = fallback_re.match(line)
+
+            if m2:
+
+                left = m2.group(1)
+                precio = m2.group(2)
+                total = m2.group(3)
+
+                tokens = left.split()
+
+                cantidad = 1
+                unidad = ""
+                codigo = ""
+                descripcion = left
+
+                for t in tokens:
+                    if re.match(r'^\d+(?:[.,]\d+)?$', t):
+                        cantidad = t
+                        break
+
+                for t in tokens:
+                    if re.match(r'^[A-Z]{2,5}$', t):
+                        unidad = t
+                        break
+
+                for t in tokens:
+                    if re.match(r'^\d{3,}$', t):
+                        codigo = t
+                        break
+
+                items.append({
+                    "Cantidad": float(str(cantidad).replace(",", ".")),
                     "Unidad": unidad,
                     "Código": codigo,
                     "Descripción": descripcion.strip(),
@@ -89,9 +135,6 @@ class DataExtractor:
             "items": self._extract_items(text)
         }
 
-    # -------------------------------------------------
-    # Tipo de documento
-    # -------------------------------------------------
     @staticmethod
     def _determine_type(text: str) -> str:
 
@@ -135,10 +178,6 @@ class DataExtractor:
 
         return rucs
 
-
-    # -------------------------------------------------
-    # Validación real de RUC (algoritmo SUNAT)
-    # -------------------------------------------------
     @staticmethod
     def _is_valid_ruc(ruc: str) -> bool:
         if not ruc or not ruc.isdigit() or len(ruc) != 11:
@@ -160,9 +199,6 @@ class DataExtractor:
 
         return dig == int(ruc[10])
 
-    # -------------------------------------------------
-    # Nombre del emisor
-    # -------------------------------------------------
     @staticmethod
     def _extract_issuer_name(text: str) -> str | None:
         if not text:
@@ -197,9 +233,6 @@ class DataExtractor:
 
         return None
 
-    # -------------------------------------------------
-    # Número de documento
-    # -------------------------------------------------
     @staticmethod
     def _extract_doc_number(text: str) -> str | None:
 
@@ -218,9 +251,6 @@ class DataExtractor:
 
         return None
 
-    # -------------------------------------------------
-    # Moneda
-    # -------------------------------------------------
     @staticmethod
     def _extract_currency(text: str) -> str | None:
 
@@ -235,9 +265,6 @@ class DataExtractor:
 
         return None
 
-    # -------------------------------------------------
-    # Fecha
-    # -------------------------------------------------
     @staticmethod
     def _extract_date(text: str) -> str | None:
 
@@ -258,9 +285,6 @@ class DataExtractor:
 
         return None
 
-    # -------------------------------------------------
-    # Dirección del emisor
-    # -------------------------------------------------
     @staticmethod
     def _extract_address(text: str) -> str | None:
 
@@ -307,9 +331,6 @@ class DataExtractor:
 
         return None
 
-    # -------------------------------------------------
-    # Importe total
-    # -------------------------------------------------
     def _extract_amount(self, text: str) -> float:
 
         m = re.search(r'IMPORTE\s*TOTAL([\s\S]{0,40})', text, re.IGNORECASE)
@@ -330,9 +351,6 @@ class DataExtractor:
 
         return 0.0
 
-    # -------------------------------------------------
-    # Normalización
-    # -------------------------------------------------
     @staticmethod
     def _normalize_float(value: str) -> float:
 
