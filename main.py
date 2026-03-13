@@ -6,6 +6,7 @@ import tempfile
 import uvicorn
 import gc
 import time
+import re
 
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -46,6 +47,7 @@ def process_file(path: str) -> ScannedDocument:
     raw_text = image_handler.extract_text(file_input, is_pdf)
 
     data = extractor.extract_data(raw_text) or {}
+    print("Data ", data)
 
     preview_image_b64 = image_handler.to_base64(file_input, is_pdf)
 
@@ -200,4 +202,4 @@ async def scan_from_front(file: UploadFile = File(...)):
 
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=6701, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=6702, reload=True)

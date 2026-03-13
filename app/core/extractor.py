@@ -3,12 +3,80 @@ from datetime import datetime
 
 
 class DataExtractor:
-
-    def extract_data(self, text: str) -> dict:
+    @staticmethod
+    def _extract_items(text: str) -> list[dict]:
 
         if not text:
-            return {}
+            return []
 
+        lines = [l.strip() for l in text.splitlines() if l.strip()]
+        print("Lineas : ", lines)
+
+        items = []
+        in_table = False
+
+        header_re = re.compile(
+            r'(CANT|UND|CODIGO|DESCRIP)',
+            re.IGNORECASE
+        )
+        print("Patron :", header_re)
+
+        stop_re = re.compile(
+            r'\b(SUBTOTAL|TOTAL|IGV|IMPORTE|SON:)\b',
+            re.IGNORECASE
+        )
+
+        row_re = re.compile(
+            r'^(\d+(?:[.,]\d+)?)\s+'        # cantidad
+            r'([A-Z]{1,5})\s+'              # unidad
+            r'(\d+)\s+'                     # codigo
+            r'(.+?)\s+'                     # descripcion
+            r'[S\$\/]*\s*(\d+(?:[.,]\d+)?)\s+'   # precio unitario
+            r'(\d+(?:[.,]\d+)?)$',          # valor item
+            re.IGNORECASE
+        )
+
+        for line in lines:
+
+            # limpieza OCR
+            line = line.replace("|", " ")
+            line = re.sub(r'\s{2,}', ' ', line).strip()
+
+            up = line.upper()
+
+            if not in_table:
+                if header_re.search(up):
+                    in_table = True
+                continue
+
+            if stop_re.search(up):
+                break
+
+            m = row_re.match(line)
+
+            if m:
+
+                cantidad = m.group(1)
+                unidad = m.group(2)
+                codigo = m.group(3)
+                descripcion = m.group(4)
+                precio = m.group(5)
+                total = m.group(6)
+
+                items.append({
+                    "Cantidad": float(cantidad.replace(",", ".")),
+                    "Unidad": unidad,
+                    "Código": codigo,
+                    "Descripción": descripcion.strip(),
+                    "Precio Unitario": float(precio.replace(",", ".")),
+                    "Valor": float(total.replace(",", "."))
+                })
+
+        return items
+
+    def extract_data(self, text: str) -> dict:
+        if not text:
+            return {}
         return {
             "documentType": self._determine_type(text),
             "documentNumber": self._extract_doc_number(text),
@@ -45,22 +113,20 @@ class DataExtractor:
         if not text:
             return []
 
-        # Limpiar OCR típico: O -> 0, I -> 1, S -> 5
         text_clean = text.upper()
         text_clean = text_clean.replace("O", "0").replace("I", "1").replace("S", "5")
 
-        # Regex: cualquier dígito, espacio, punto o guion, 11 dígitos en total
         raw_matches = re.findall(r'(?:\d[\s\.-]?){11,}', text_clean)
 
         rucs = []
         seen = set()
 
         for m in raw_matches:
-            # Quitar todos los caracteres no numéricos
+
             digits = re.sub(r'\D', '', m)
 
-            # Tomar solo los primeros 11 dígitos para validar
             if len(digits) >= 11:
+
                 candidate = digits[:11]
 
                 if candidate not in seen and DataExtractor._is_valid_ruc(candidate):
@@ -78,7 +144,6 @@ class DataExtractor:
         if not ruc or not ruc.isdigit() or len(ruc) != 11:
             return False
 
-        # Prefijos válidos en Perú (RUC empresas y personas jurídicas)
         valid_prefixes = ("10", "15", "16", "17", "20")
         if ruc[:2] not in valid_prefixes:
             return False
@@ -264,74 +329,6 @@ class DataExtractor:
                 return self._normalize_float(n.group(1))
 
         return 0.0
-
-    # -------------------------------------------------
-    # Detalle de items (solo descripción)
-    # -------------------------------------------------
-    @staticmethod
-    def _extract_items(text: str) -> list[dict]:
-
-        if not text:
-            return []
-
-        lines = [l.strip() for l in text.splitlines() if l.strip()]
-
-        items = []
-        current = None
-        in_table = False
-
-        header_re = re.compile(r'\b(CANT|CANT\.?)\b.*\bDESCRIP', re.IGNORECASE)
-
-        row_re = re.compile(
-            r'^(\d+(?:[.,]\d+)?)\s+([A-Z]{1,5})\s+(.*)$',
-            re.IGNORECASE
-        )
-
-        stop_re = re.compile(
-            r'\b(SUBTOTAL|TOTAL|IGV|OP\.?\s*GRAV|IMPORTE\s+TOTAL)\b',
-            re.IGNORECASE
-        )
-
-        for line in lines:
-
-            up = line.upper()
-
-            if not in_table:
-                if header_re.search(up):
-                    in_table = True
-                continue
-
-            if stop_re.search(up):
-                break
-
-            m = row_re.match(line)
-
-            if m:
-                if current:
-                    items.append({"descripcion": current.strip()})
-
-                desc = m.group(3).strip()
-
-                desc = re.sub(
-                    r'\s+\d+[.,]\d+.*$',
-                    '',
-                    desc
-                )
-
-                current = desc
-                continue
-
-            if current:
-                if not re.search(
-                    r'\b(CANT|UNIDAD|DESCRIP|P\.?UNIT|DTO|DSCTO|TOTAL)\b',
-                    up
-                ):
-                    current += " " + line.strip()
-
-        if current:
-            items.append({"descripcion": current.strip()})
-
-        return items
 
     # -------------------------------------------------
     # Normalización
