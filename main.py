@@ -18,6 +18,8 @@ from app.network.backend_client import BackendClient
 from app.domain import ScannedDocument
 from app.config import INPUT_FOLDER, PROCESSED_FOLDER, ERROR_FOLDER, SUPPORTED_EXTENSIONS
 
+import sys
+sys.stdout.reconfigure(encoding='utf-8')
 
 app = FastAPI()
 
@@ -202,4 +204,4 @@ async def scan_from_front(file: UploadFile = File(...)):
 
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=6702, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=7000, reload=True)
