@@ -138,7 +138,7 @@ class DataExtractor:
 
     @staticmethod
     def _extract_igv(text: str) -> float:
-        pattern = r"IGV[:\s]*[S/.$]*\s*([\d,]+\.\d{2})"
+        pattern = r"I\.?\s*G\.?\s*V\.?[:\s]*[S/.$]*\s*([\d,]+\.\d{2})"
 
         match = re.search(pattern, text, re.IGNORECASE)
 
