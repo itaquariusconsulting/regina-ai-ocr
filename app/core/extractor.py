@@ -132,8 +132,21 @@ class DataExtractor:
             "issuerName": self._extract_issuer_name(text),
             "issuerAddress": self._extract_address(text),
             "amount": self._extract_amount(text),
-            "items": self._extract_items(text)
+            "items": self._extract_items(text),
+            "igv": self._extract_igv(text)
         }
+
+    @staticmethod
+    def _extract_igv(text: str) -> float:
+        pattern = r"IGV[:\s]*[S/.$]*\s*([\d,]+\.\d{2})"
+
+        match = re.search(pattern, text, re.IGNORECASE)
+
+        if match:
+            value_str = match.group(1).replace(',', '')
+            return float(value_str)
+
+        return 0.0
 
     @staticmethod
     def _determine_type(text: str) -> str:

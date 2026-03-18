@@ -21,6 +21,7 @@ class ScannedDocument:
 
     imageBase64: str
     rawText: str
+    igv: float
 
     def to_dict(self):
         return asdict(self)

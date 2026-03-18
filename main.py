@@ -69,6 +69,7 @@ def process_file(path: str) -> ScannedDocument:
         issuerAddress=data.get("issuerAddress"),
         amount=data.get("amount") or 0.0,
         items=data.get("items") or [],
+        igv=data.get("igv") or 0.0,
         rawText = raw_text,
         imageBase64=preview_image_b64
     )
@@ -169,7 +170,8 @@ async def scan_from_front(file: UploadFile = File(...)):
                 "issuerAddress": doc.issuerAddress,
                 "amount": doc.amount,
                 "rawText": doc.rawText,
-                "items": doc.items
+                "items": doc.items,
+                "igv": doc.igv
             },
             "imageBase64": doc.imageBase64
         }
