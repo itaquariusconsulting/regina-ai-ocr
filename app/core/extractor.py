@@ -161,6 +161,9 @@ class DataExtractor:
 
         if "NOTA DE CRÉDITO" in t or "N O T A   D E   C R É D I T O" in t:
             return "NOTA DE CRÉDITO"
+        
+        if "RECIBO" in t or "R E C I B O" in t:
+            return "RECIBO"
 
         return "TIPO DESCONOCIDO"
 
@@ -246,49 +249,47 @@ class DataExtractor:
 
         return None
 
-@staticmethod
-def _extract_doc_number(text: str) -> str | None:
-    if not text:
-        return None
+    @staticmethod
+    def _extract_doc_number(text: str) -> str | None:
+        if not text:
+            return None
 
-    # Normalizar texto para OCR defectuoso
-    clean = text.upper()
-    clean = clean.replace("O", "0")
-    clean = clean.replace("I", "1")
-    clean = clean.replace("S", "5")
+        # Normalizar texto para OCR defectuoso
+        clean = text.upper()
+        clean = clean.replace("O", "0")
+        clean = clean.replace("I", "1")
+        clean = clean.replace("S", "5")
 
-    # Eliminar caracteres raros pero mantener separadores útiles
-    clean = re.sub(r'[^\w\s\-°º.]', ' ', clean)
-    clean = re.sub(r'\s+', ' ', clean)
+        # Eliminar caracteres raros pero mantener separadores útiles
+        clean = re.sub(r'[^\w\s\-°º.]', ' ', clean)
+        clean = re.sub(r'\s+', ' ', clean)
 
-    # Lista de patrones (de más específico a más flexible)
-    patterns = [
-        # Formato: F001 N° 000123
-        r'\b([FBE]\d{3})\s*(?:N[°ºO]?\.?|NRO\.?)\s*[-]?\s*(\d{1,10})\b',
+        # Lista de patrones (de más específico a más flexible)
+        patterns = [
+            # Formato: F001 N° 000123
+            r'\b([FBE]\d{3})\s*(?:N[°ºO]?\.?|NRO\.?)\s*[-]?\s*(\d{1,10})\b',
 
-        # Formato: F001-000123 o E001 - 137
-        r'\b([FBE]\d{3})\s*[-]\s*(\d{1,10})\b',
+            # Formato: F001-000123 o E001 - 137
+            r'\b([FBE]\d{3})\s*[-]\s*(\d{1,10})\b',
 
-        # Formato: F001 000123
-        r'\b([FBE]\d{3})\s+(\d{1,10})\b',
+            # Formato: F001 000123
+            r'\b([FBE]\d{3})\s+(\d{1,10})\b',
 
-        # Formato ultra flexible OCR: F001000123
-        r'\b([FBE]\d{3})(\d{1,10})\b',
-    ]
+            # Formato ultra flexible OCR: F001000123
+            r'\b([FBE]\d{3})(\d{1,10})\b',
+        ]
 
-    for pattern in patterns:
-        matches = re.findall(pattern, clean, re.IGNORECASE)
+        for pattern in patterns:
+            matches = re.findall(pattern, clean, re.IGNORECASE)
 
-        if matches:
-            # Tomar el match más consistente (último suele ser el correcto)
-            serie, numero = matches[-1]
+            if matches:
+                # Tomar el match más consistente (último suele ser el correcto)
+                serie, numero = matches[-1]
 
-            # Normalizar número (quitar ceros innecesarios a la izquierda)
-            numero = str(int(numero))
+                # Normalizar número (quitar ceros innecesarios a la izquierda)
+                numero = str(int(numero))
 
-            return f"{serie}-{numero}"
-
-    return None
+                return f"{serie}-{numero}"
 
     @staticmethod
     def _extract_currency(text: str) -> str | None:
