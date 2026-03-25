@@ -150,22 +150,25 @@ class DataExtractor:
 
     @staticmethod
     def _determine_type(text: str) -> str:
+        text = re.sub(r'\S+@\S+', '', text)
+
+        text = re.sub(r'WWW\.\S+|HTTP\S+', '', text, flags=re.IGNORECASE)
 
         t = text.upper()
 
-        if "FACTURA" in t or "F A C T U R A" in t:
-            return "FACTURA"
+        if "NOTA DE CREDITO" in t or "NOTA" in t or "N O T A" in t:
+            return "N"
 
-        if "BOLETA" in t or "B O L E T A" in t:
-            return "BOLETA"
+        if "RECIBO POR HONORARIOS" in t or "RECIBO" in t or "R E C I B O" in t:
+            return "R"
 
-        if "NOTA DE CRÉDITO" in t or "N O T A   D E   C R É D I T O" in t:
-            return "NOTA DE CRÉDITO"
-        
-        if "RECIBO" in t or "R E C I B O" in t:
-            return "RECIBO"
+        if "BOLETA DE VENTA" in t or "BOLETA" in t or "B O L E T A" in t:
+            return "B"
 
-        return "TIPO DESCONOCIDO"
+        if "FACTURA ELECTRONICA" in t or "FACTURA" in t or "F A C T U R A" in t:
+            return "F"
+
+        return "X"
 
     @staticmethod
     def _extract_all_rucs(text: str) -> list[str]:
