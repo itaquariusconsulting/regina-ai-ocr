@@ -1,7 +1,31 @@
-opencv-python
-pytesseract
-requests
-pdf2image
-Pillow
-numpy
-pdfplumber
+# ---------------------------------------------------------------
+# REGINA - Servicio OCR
+# Python 3.11
+#
+# Servidor web: FastAPI + uvicorn. Faltaban en la version anterior
+# de este archivo, por lo que una instalacion limpia no arrancaba.
+# python-multipart lo exige FastAPI para recibir archivos subidos
+# (endpoint /ocr/scan); sin el, la aplicacion falla al iniciar.
+#
+# Requiere ademas, instalados en el sistema operativo:
+#   - Tesseract OCR   (motor de reconocimiento, lo usa pytesseract)
+#   - Poppler         (conversion de PDF a imagen, lo usa pdf2image)
+# ---------------------------------------------------------------
+
+# --- Servidor web ---
+fastapi==0.141.1
+uvicorn[standard]==0.52.0
+python-multipart==0.0.32
+
+# --- Procesamiento de imagenes y OCR ---
+opencv-python==4.12.0.88
+pytesseract==0.3.13
+Pillow==12.3.0
+numpy==2.4.6
+
+# --- PDF ---
+pdf2image==1.17.0
+pdfplumber==0.11.10
+
+# --- HTTP ---
+requests==2.34.2
