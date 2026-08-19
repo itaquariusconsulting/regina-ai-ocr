@@ -1,6 +1,11 @@
 import re
 from datetime import datetime
 
+try:                                    # import normal dentro del paquete
+    from .doc_number import parse_nro_comprobante
+except ImportError:                     # si se ejecuta el archivo suelto
+    from doc_number import parse_nro_comprobante
+
 
 class DataExtractor:
 
@@ -9,9 +14,11 @@ class DataExtractor:
         if not text:
             return {}
 
+        tipo = self._determine_type(text)
+
         return {
-            "documentType": self._determine_type(text),
-            "documentNumber": self._extract_doc_number(text),
+            "documentType": tipo,
+            "documentNumber": self._extract_doc_number(text, tipo),
             "documentDate": self._extract_date(text),
             "issuerRuc": self._extract_issuer_ruc(text),
             "issuerAddress": self._extract_address(text),
@@ -64,22 +71,26 @@ class DataExtractor:
     # Número de documento
     # -------------------------------------------------
     @staticmethod
-    def _extract_doc_number(text: str) -> str:
+    def _extract_doc_number(text: str, tipo_doc: str = None) -> str:
+        """
+        Devuelve "SERIE-NUMERO" (p.ej. "F002-11092") o None.
 
-        m = re.search(
-            r'\b([FBE]\d{3})\s*(?:N[°ºo]?\.?|NRO\.?)\s*([0-9]{4,10})\b',
-            text,
-            re.IGNORECASE
-        )
+        Toda la casuistica vive en `doc_number.parse_nro_comprobante`:
+        separadores raros, etiquetas N°/Nro/NUMERO, serie pegada al numero,
+        saltos de linea, ceros a la izquierda, confusiones del OCR (O/0, I/1,
+        S/5, B/8) y descarte de RUC, fechas e importes.
+        """
+        resultado = parse_nro_comprobante(text, tipo_doc)
+        return f"{resultado.serie}-{resultado.numero}" if resultado.ok else None
 
-        if m:
-            return f"{m.group(1)}-{m.group(2)}"
-
-        m = re.search(r'\b([FBE]\d{3})[-\s]+([0-9]{4,10})\b', text)
-        if m:
-            return f"{m.group(1)}-{m.group(2)}"
-
-        return None
+    @staticmethod
+    def extraer_nro_comprobante_detallado(text: str, tipo_doc: str = None) -> dict:
+        """
+        Igual que `_extract_doc_number` pero devuelve el detalle completo
+        (confianza, patron que lo encontro, advertencias). Util para depurar
+        por que un comprobante no se leyo bien, sin volver a pasar el OCR.
+        """
+        return parse_nro_comprobante(text, tipo_doc).to_dict()
 
     # -------------------------------------------------
     # Fecha
