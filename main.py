@@ -7,12 +7,12 @@ import uvicorn
 import gc
 import time
 
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.utils.file_mover import FileMover
 from app.core.extractor import DataExtractor
-from app.infrastructure.image_handler import ImageHandler
+from app.ocr.lector import Lector
 from app.network.backend_client import BackendClient
 from app.domain import ScannedDocument
 from app.config import INPUT_FOLDER, PROCESSED_FOLDER, ERROR_FOLDER, SUPPORTED_EXTENSIONS
@@ -34,7 +34,13 @@ app.add_middleware(
 # -------------------------------
 # Dependencias
 # -------------------------------
-image_handler = ImageHandler()
+# El lector resuelve PDF con texto, PDF imagen y fotos; el extractor saca los
+# campos. Si Tesseract o Poppler no estan en el PATH del servidor, se indican
+# aca (en Windows suele hacer falta el poppler_path).
+lector = Lector(
+    tesseract_cmd=os.environ.get("TESSERACT_CMD"),
+    poppler_path=os.environ.get("POPPLER_PATH"),
+)
 extractor = DataExtractor()
 client = BackendClient()
 
@@ -54,23 +60,23 @@ def extension_supported(filename: str) -> bool:
 # -------------------------------
 # Pipeline común
 # -------------------------------
-def process_file(path: str) -> ScannedDocument:
+def process_file(path: str, ruc_consultante: str = None):
+    """
+    Lee el documento y extrae sus campos.
 
-    file_input, is_pdf = image_handler.load_image(path)
+    Devuelve (documento, datos_completos, lectura):
+      - documento: ScannedDocument con los campos historicos
+      - datos_completos: todo lo que saco el extractor, incluidos los campos
+        nuevos (razon social, IGV, moneda, confianza y advertencias)
+      - lectura: de donde salio el texto (PDF nativo o que pasada de OCR)
 
-    raw_text = image_handler.extract_text(file_input, is_pdf)
+    El lector para apenas tiene los campos criticos, asi que un PDF con texto
+    o una imagen limpia se resuelven en la primera pasada; las pasadas caras
+    (binarizacion, enderezado, 400 dpi) solo corren cuando hacen falta.
+    """
+    lectura = lector.leer(path, suficiente=extractor.campos_criticos_completos)
 
-    data = extractor.extract_data(raw_text) or {}
-
-    preview_image_b64 = image_handler.to_base64(file_input, is_pdf)
-
-    if not is_pdf and hasattr(file_input, "close"):
-        try:
-            file_input.close()
-        except:
-            pass
-
-    amount_text = str(data.get("amount") or "")
+    data = extractor.extract_data(lectura.texto, ruc_consultante) or {}
 
     doc = ScannedDocument(
         documentType=data.get("documentType"),
@@ -78,12 +84,12 @@ def process_file(path: str) -> ScannedDocument:
         documentDate=data.get("documentDate"),
         issuerRuc=data.get("issuerRuc"),
         issuerAddress=data.get("issuerAddress"),
-        amount=data.get("amount"),
-        rawText=raw_text,
-        imageBase64=preview_image_b64
+        amount=data.get("amount") or 0.0,
+        rawText=lectura.texto,
+        imageBase64=lector.previsualizacion_base64(path),
     )
 
-    return doc
+    return doc, data, lectura
 
 
 # -------------------------------
@@ -108,7 +114,7 @@ def main():
         print(f"\n--- Procesando [{i}/{len(files)}]: {filename} ---")
 
         try:
-            doc = process_file(file_path)
+            doc, _datos, _lectura = process_file(file_path)
 
             if not doc.is_valid():
                 print("   [SKIP] Datos inválidos (Faltan Monto o RUC)")
@@ -146,7 +152,14 @@ def run_batch():
 # Solo guarda si es válido
 # -------------------------------
 @app.post("/ocr/scan")
-async def scan_from_front(file: UploadFile = File(...)):
+async def scan_from_front(file: UploadFile = File(...),
+                          ruc_consultante: str = Form(None)):
+    """
+    `ruc_consultante` es opcional: si la vista manda el RUC de la empresa, el
+    extractor lo descarta al elegir el RUC del emisor (en una factura de
+    compra ese RUC es siempre el del cliente). Sin el, igual funciona: la
+    deteccion se apoya en la vecindad del titulo y la serie.
+    """
 
     ensure_folders()
 
@@ -167,18 +180,33 @@ async def scan_from_front(file: UploadFile = File(...)):
 
         await file.close()
 
-        doc = process_file(tmp_path)
+        doc, datos, lectura = process_file(tmp_path, ruc_consultante)
 
         response = {
             "success": doc.is_valid(),
             "detectedData": {
+                # --- claves de siempre ---
                 "documentType": doc.documentType,
                 "documentNumber": doc.documentNumber,
                 "documentDate": doc.documentDate,
                 "issuerRuc": doc.issuerRuc,
                 "issuerAddress": doc.issuerAddress,
                 "amount": doc.amount,
-                "rawText": doc.rawText
+                "rawText": doc.rawText,
+
+                # --- nuevas, aditivas: la vista las usa si quiere ---
+                "issuerName": datos.get("issuerName"),
+                "clientRuc": datos.get("clientRuc"),
+                "currency": datos.get("currency"),
+                "subtotal": datos.get("subtotal"),
+                "igv": datos.get("igv"),
+                "igvRate": datos.get("igvRate"),
+                "detalle": datos.get("detalle"),
+            },
+            "lectura": {
+                "origen": lectura.origen,
+                "pasadas": lectura.pasadas,
+                "paginas": lectura.paginas,
             },
             "imageBase64": doc.imageBase64
         }
