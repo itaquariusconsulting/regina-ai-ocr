@@ -164,6 +164,7 @@ class Lector:
     def leer(self, ruta: str,
              suficiente: Optional[Callable[[str], bool]] = None,
              forzar_ocr: bool = False,
+             pasadas_pesadas_primero: bool = False,
              max_pasadas: int = len(PASADAS)) -> Lectura:
         """
         Devuelve el texto del documento.
@@ -171,6 +172,10 @@ class Lector:
         `suficiente` decide cuando parar: recibe el texto acumulado y responde
         si ya alcanza. Lo provee el extractor, que es quien sabe si los campos
         criticos estan completos. Sin el, se corta en la primera pasada.
+
+        `pasadas_pesadas_primero` invierte el orden: es lo que hace el boton
+        "Mejorar la imagen" de la vista, cuando el usuario ya vio que la
+        lectura normal no alcanzo.
         """
         lectura = Lectura()
         es_pdf = ruta.lower().endswith(".pdf")
@@ -189,8 +194,10 @@ class Lector:
         mejor_texto = lectura.texto
         mejor_origen = lectura.origen
 
+        orden = list(reversed(PASADAS)) if pasadas_pesadas_primero else list(PASADAS)
+
         cache_paginas = {}
-        for pasada in PASADAS[:max_pasadas]:
+        for pasada in orden[:max_pasadas]:
             try:
                 if pasada.dpi not in cache_paginas:
                     cache_paginas[pasada.dpi] = (

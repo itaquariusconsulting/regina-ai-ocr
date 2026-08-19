@@ -6,23 +6,28 @@ import tempfile
 import uvicorn
 import gc
 import time
+import re
 
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.utils.file_mover import FileMover
 from app.core.extractor import DataExtractor
+from app.core.mobility_extractor import (
+    MobilityExtractor, calcular_legibilidad,
+    extraer_importe, extraer_fecha, extraer_numero, extraer_moneda,
+)
+from app.infrastructure.image_handler import ImageHandler
 from app.ocr.lector import Lector
 from app.network.backend_client import BackendClient
 from app.domain import ScannedDocument
 from app.config import INPUT_FOLDER, PROCESSED_FOLDER, ERROR_FOLDER, SUPPORTED_EXTENSIONS
 
+import sys
+sys.stdout.reconfigure(encoding='utf-8')
 
 app = FastAPI()
 
-# -------------------------------
-# CORS
-# -------------------------------
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -31,75 +36,108 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# -------------------------------
-# Dependencias
-# -------------------------------
-# El lector resuelve PDF con texto, PDF imagen y fotos; el extractor saca los
-# campos. Si Tesseract o Poppler no estan en el PATH del servidor, se indican
-# aca (en Windows suele hacer falta el poppler_path).
+image_handler = ImageHandler()
+
+# El lector resuelve PDF con texto (pdfplumber), PDF imagen y fotos, con OCR
+# en cascada: espanol + PSM 3 primero y, solo si faltan campos, binarizacion,
+# enderezado y 400 dpi. Se midio sobre facturas reales: con la configuracion
+# anterior (ingles, PSM 6) el RUC del emisor y el importe salian en 0 de 4.
+# Si Tesseract o Poppler no estan en el PATH del servicio, se indican por
+# variable de entorno y no hay que tocar codigo.
 lector = Lector(
     tesseract_cmd=os.environ.get("TESSERACT_CMD"),
     poppler_path=os.environ.get("POPPLER_PATH"),
 )
 extractor = DataExtractor()
+mobility = MobilityExtractor()
 client = BackendClient()
 
-
-# -------------------------------
-# Utilidades
-# -------------------------------
 def ensure_folders():
     for folder in (INPUT_FOLDER, PROCESSED_FOLDER, ERROR_FOLDER):
         os.makedirs(folder, exist_ok=True)
 
-
 def extension_supported(filename: str) -> bool:
     return filename.lower().endswith(tuple(SUPPORTED_EXTENSIONS))
 
+def process_file(path: str, enhance: bool = False):
+    """Devuelve (documento, extra). `extra` trae los campos de movilidad
+    y el puntaje de legibilidad; no se toca el contrato de ScannedDocument."""
 
-# -------------------------------
-# Pipeline común
-# -------------------------------
-def process_file(path: str, ruc_consultante: str = None):
-    """
-    Lee el documento y extrae sus campos.
+    file_input, is_pdf = image_handler.load_image(path)
 
-    Devuelve (documento, datos_completos, lectura):
-      - documento: ScannedDocument con los campos historicos
-      - datos_completos: todo lo que saco el extractor, incluidos los campos
-        nuevos (razon social, IGV, moneda, confianza y advertencias)
-      - lectura: de donde salio el texto (PDF nativo o que pasada de OCR)
+    # `enhance` (el boton "Mejorar la imagen" de la vista) salta la vuelta
+    # barata: fuerza OCR aunque el PDF traiga texto y arranca por las pasadas
+    # con binarizacion y enderezado.
+    lectura = lector.leer(
+        path,
+        suficiente=extractor.campos_criticos_completos,
+        forzar_ocr=enhance,
+        pasadas_pesadas_primero=enhance,
+    )
+    raw_text = lectura.texto
+    print(f"[OCR] origen={lectura.origen} pasadas={lectura.pasadas}")
 
-    El lector para apenas tiene los campos criticos, asi que un PDF con texto
-    o una imagen limpia se resuelven en la primera pasada; las pasadas caras
-    (binarizacion, enderezado, 400 dpi) solo corren cuando hacen falta.
-    """
-    lectura = lector.leer(path, suficiente=extractor.campos_criticos_completos)
+    data = extractor.extract_data(raw_text) or {}
 
-    data = extractor.extract_data(lectura.texto, ruc_consultante) or {}
+    preview_image_b64 = image_handler.to_base64(file_input, is_pdf)
+
+    if not is_pdf and hasattr(file_input, "close"):
+        try:
+            file_input.close()
+        except:
+            pass
 
     doc = ScannedDocument(
         documentType=data.get("documentType"),
         documentNumber=data.get("documentNumber"),
+        documentCurrency=data.get("documentCurrency"),
         documentDate=data.get("documentDate"),
-        issuerRuc=data.get("issuerRuc"),
+        issuerRuc=data.get("issuerRuc") or [],
+        issuerName=data.get("issuerName"),
         issuerAddress=data.get("issuerAddress"),
         amount=data.get("amount") or 0.0,
-        rawText=lectura.texto,
-        imageBase64=lector.previsualizacion_base64(path),
+        items=data.get("items") or [],
+        igv=data.get("igv") or 0.0,
+        rawText = raw_text,
+        imageBase64=preview_image_b64
     )
 
-    return doc, data, lectura
+    extra = mobility.extract(raw_text)
+    extra["legibilityScore"] = calcular_legibilidad(raw_text)
+
+    # Trazabilidad de la lectura y de los importes: de donde salio cada dato y
+    # que no cuadro. Es aditivo; la vista lo usa si quiere.
+    extra["igvRate"] = data.get("igvRate")
+    extra["subtotal"] = data.get("subtotal")
+    extra["detalle"] = data.get("detalle")
+    extra["lectura"] = {
+        "origen": lectura.origen,
+        "pasadas": lectura.pasadas,
+        "paginas": lectura.paginas,
+    }
+
+    # Complementos: el extractor principal esta hecho para comprobantes
+    # SUNAT en espanol. Si no encontro importe, fecha, numero o moneda,
+    # reintentamos con patrones mas amplios (recibos de apps, en ingles).
+    if not doc.amount:
+        doc.amount = extraer_importe(raw_text) or doc.amount
+    if not doc.documentDate:
+        doc.documentDate = extraer_fecha(raw_text)
+    if not doc.documentNumber:
+        doc.documentNumber = extraer_numero(raw_text)
+    if not doc.documentCurrency:
+        doc.documentCurrency = extraer_moneda(raw_text)
+
+    return doc, extra
 
 
-# -------------------------------
-# Lógica batch
-# -------------------------------
 def main():
 
     print("Iniciando proceso de OCR en batch...")
 
     ensure_folders()
+
+    rucs_detectados = []
 
     files = [
         f for f in glob.glob(os.path.join(INPUT_FOLDER, "*"))
@@ -114,7 +152,9 @@ def main():
         print(f"\n--- Procesando [{i}/{len(files)}]: {filename} ---")
 
         try:
-            doc, _datos, _lectura = process_file(file_path)
+            doc, _ = process_file(file_path)
+
+            rucs_detectados.extend(doc.issuerRuc)
 
             if not doc.is_valid():
                 print("   [SKIP] Datos inválidos (Faltan Monto o RUC)")
@@ -136,30 +176,20 @@ def main():
             except Exception as move_error:
                 print(f"   [MOVE ERROR] {filename}: {move_error}")
 
+    return rucs_detectados
 
-# -------------------------------
-# Endpoint batch
-# -------------------------------
+
 @app.post("/ocr/run-batch")
 def run_batch():
-    main()
-    return {"status": "ok"}
+    rucs = main()
+    return {
+        "status": "ok",
+        "rucs": rucs
+    }
 
 
-# -------------------------------
-# Endpoint para Angular / móvil
-# Devuelve siempre los datos detectados
-# Solo guarda si es válido
-# -------------------------------
 @app.post("/ocr/scan")
-async def scan_from_front(file: UploadFile = File(...),
-                          ruc_consultante: str = Form(None)):
-    """
-    `ruc_consultante` es opcional: si la vista manda el RUC de la empresa, el
-    extractor lo descarta al elegir el RUC del emisor (en una factura de
-    compra ese RUC es siempre el del cliente). Sin el, igual funciona: la
-    deteccion se apoya en la vecindad del titulo y la serie.
-    """
+async def scan_from_front(file: UploadFile = File(...), enhance: bool = False):
 
     ensure_folders()
 
@@ -180,34 +210,48 @@ async def scan_from_front(file: UploadFile = File(...),
 
         await file.close()
 
-        doc, datos, lectura = process_file(tmp_path, ruc_consultante)
+        doc, extra = process_file(tmp_path, enhance)
 
         response = {
             "success": doc.is_valid(),
             "detectedData": {
-                # --- claves de siempre ---
                 "documentType": doc.documentType,
                 "documentNumber": doc.documentNumber,
+                "documentCurrency": doc.documentCurrency,
                 "documentDate": doc.documentDate,
                 "issuerRuc": doc.issuerRuc,
+                "issuerName": doc.issuerName,
                 "issuerAddress": doc.issuerAddress,
                 "amount": doc.amount,
                 "rawText": doc.rawText,
+                "items": doc.items,
+                "igv": doc.igv,
 
-                # --- nuevas, aditivas: la vista las usa si quiere ---
-                "issuerName": datos.get("issuerName"),
-                "clientRuc": datos.get("clientRuc"),
-                "currency": datos.get("currency"),
-                "subtotal": datos.get("subtotal"),
-                "igv": datos.get("igv"),
-                "igvRate": datos.get("igvRate"),
-                "detalle": datos.get("detalle"),
+                # ---- MOVILIDAD: lo consume edit-planilla-movilidad ----
+                "isMobility": extra.get("isMobility"),
+                "driverName": extra.get("driverName"),
+                "vehicle": extra.get("vehicle"),
+                "serviceType": extra.get("serviceType"),
+                "pickupAddress": extra.get("pickupAddress"),
+                "dropoffAddress": extra.get("dropoffAddress"),
+                "pickupTime": extra.get("pickupTime"),
+                "dropoffTime": extra.get("dropoffTime"),
+                "distance": extra.get("distance"),
+                "commercialName": extra.get("commercialName"),
+                "glosaSugerida": extra.get("glosaSugerida"),
+                "legibilityScore": extra.get("legibilityScore"),
+
+                # ---- Aditivos: importes verificados y trazabilidad ----
+                # La vista puede pre-llenar el % de IGV con igvRate (18% o
+                # 10.5% de restaurantes, deducido del propio documento) y
+                # mostrar en detalle de donde salio cada dato.
+                "igvRate": extra.get("igvRate"),
+                "subtotal": extra.get("subtotal"),
+                "detalle": extra.get("detalle"),
+                "lectura": extra.get("lectura"),
             },
-            "lectura": {
-                "origen": lectura.origen,
-                "pasadas": lectura.pasadas,
-                "paginas": lectura.paginas,
-            },
+            "legibilityScore": extra.get("legibilityScore"),
+            "enhanced": enhance,
             "imageBase64": doc.imageBase64
         }
 
@@ -240,8 +284,8 @@ async def scan_from_front(file: UploadFile = File(...),
                 pass
 
 
-# -------------------------------
-# Arranque
-# -------------------------------
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=6701, reload=True)
+    # El puerto lo define el entorno. `regina-ia` (Java) busca el OCR en
+    # su ocr.api.url; hoy en produccion es el 11001.
+    puerto = int(os.getenv("OCR_PORT", "11001"))
+    uvicorn.run("main:app", host="0.0.0.0", port=puerto)

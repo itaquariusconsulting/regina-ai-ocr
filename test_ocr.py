@@ -54,7 +54,10 @@ def main():
 
         nro_esperado = f"{v['serie']}-{v['numero']}"
         ok_nro = d.get("documentNumber") == nro_esperado
-        ok_ruc = d.get("issuerRuc") == v["ruc"]
+        rucs = d.get("issuerRuc") or []
+        primero = rucs[0] if isinstance(rucs, list) and rucs else rucs
+        # la vista hace issuerRuc[0], asi que lo que importa es el PRIMERO
+        ok_ruc = primero == v["ruc"]
         ok_monto = float(d.get("amount") or 0) > 0
         ok_fecha = bool(d.get("documentDate"))
         ok_razon = bool(d.get("issuerName"))
@@ -68,9 +71,9 @@ def main():
         marca = lambda ok: "OK " if ok else "FALLA"
         print(f"\n--- {nombre}  [{lectura.origen}, {seg:.1f}s] ---")
         print(f"  [{marca(ok_nro)}] nro     {d.get('documentNumber')}  (esperado {nro_esperado})")
-        print(f"  [{marca(ok_ruc)}] ruc     {d.get('issuerRuc')}  (esperado {v['ruc']})")
-        print(f"  [{marca(ok_monto)}] monto   {d.get('amount')} {d.get('currency')}"
-              f"  (igv {d.get('igv')} @ {d.get('igvRate')})")
+        print(f"  [{marca(ok_ruc)}] ruc     {primero}  (esperado {v['ruc']})  lista={rucs}")
+        print(f"  [{marca(ok_monto)}] monto   {d.get('amount')} {d.get('documentCurrency')}"
+              f"  (igv {d.get('igv')} @ {d.get('igvRate')}, items {len(d.get('items') or [])})")
         print(f"  [{marca(ok_fecha)}] fecha   {d.get('documentDate')}")
         print(f"  [{marca(ok_razon)}] emisor  {d.get('issuerName')}")
         print(f"        direccion {str(d.get('issuerAddress'))[:52]}")

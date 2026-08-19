@@ -7,6 +7,8 @@ from pdf2image import convert_from_path
 from PIL import Image
 from io import BytesIO
 
+from app.config import POPPLER_PATH
+
 
 class ImageHandler:
 
@@ -20,11 +22,13 @@ class ImageHandler:
             return file_path, True
         return Image.open(file_path), False
 
-    def extract_text(self, file_input, is_pdf: bool) -> str:
+    def extract_text(self, file_input, is_pdf: bool, enhance: bool = False) -> str:
         """Hybrid Extraction: Tries Native PDF first, then OCR."""
 
         # STRATEGY 1: Native PDF
-        if is_pdf:
+        # Con enhance=True se fuerza el OCR: si el PDF trae texto nativo no
+        # hay imagen que mejorar, y el usuario pidio explicitamente reintentar.
+        if is_pdf and not enhance:
             try:
                 text = ""
                 with pdfplumber.open(file_input) as pdf:
@@ -42,12 +46,14 @@ class ImageHandler:
 
         # STRATEGY 2: OCR
         if is_pdf:
-            images = convert_from_path(file_input, dpi=300)
+            images = convert_from_path(file_input, dpi=300,
+                                       poppler_path=POPPLER_PATH)
             pil_image = images[0]
         else:
             pil_image = file_input
 
-        processed_img = self._preprocess_for_ocr(pil_image)
+        processed_img = (self._preprocess_strong(pil_image) if enhance
+                         else self._preprocess_for_ocr(pil_image))
 
         print("🔍 Running OCR...")
         return pytesseract.image_to_string(processed_img, config="--psm 6")
@@ -72,12 +78,57 @@ class ImageHandler:
 
         return resized
 
+    def _preprocess_strong(self, pil_image: Image.Image) -> np.ndarray:
+        """
+        Pipeline agresivo para comprobantes ilegibles (enhance=True):
+        gris -> reescalado que solo agranda -> reduccion de ruido conservando
+        bordes -> umbral adaptativo -> correccion de inclinacion.
+        """
+        if pil_image.mode != "RGB":
+            pil_image = pil_image.convert("RGB")
+
+        img = np.array(pil_image)
+        if len(img.shape) == 3:
+            img = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+
+        objetivo = 3000
+        escala = objetivo / img.shape[1]
+        if escala > 1:
+            img = cv2.resize(img, (objetivo, int(img.shape[0] * escala)),
+                             interpolation=cv2.INTER_CUBIC)
+
+        img = cv2.bilateralFilter(img, 9, 75, 75)
+        img = cv2.adaptiveThreshold(
+            img, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY, 31, 15)
+
+        return self._deskew(img)
+
+    @staticmethod
+    def _deskew(img):
+        """Endereza el papel torcido. Ante cualquier duda devuelve el original."""
+        try:
+            coords = np.column_stack(np.where(img < 255))
+            if coords.size == 0:
+                return img
+            angulo = cv2.minAreaRect(coords)[-1]
+            angulo = -(90 + angulo) if angulo < -45 else -angulo
+            if abs(angulo) < 0.5 or abs(angulo) > 20:
+                return img
+            alto, ancho = img.shape[:2]
+            m = cv2.getRotationMatrix2D((ancho // 2, alto // 2), angulo, 1.0)
+            return cv2.warpAffine(img, m, (ancho, alto),
+                                  flags=cv2.INTER_CUBIC,
+                                  borderMode=cv2.BORDER_REPLICATE)
+        except Exception:
+            return img
+
     def to_base64(self, file_input, is_pdf: bool) -> str:
         if is_pdf:
             images = convert_from_path(
                 file_input,
                 dpi=300,
-                poppler_path=r"C:\poppler\Library\bin"
+                poppler_path=POPPLER_PATH
             )
             pil_image = images[0]
         else:
