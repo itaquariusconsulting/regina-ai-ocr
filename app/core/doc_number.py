@@ -65,6 +65,17 @@ LETRA_POR_TIPO = {
     "RECIBO": {"R", "E"},
 }
 
+#: Letra OBLIGATORIA de la serie segun el tipo, para comprobantes
+#: electronicos. Es regla de SUNAT: una factura electronica lleva serie F###
+#: y una boleta B###. Si el titulo del documento dice FACTURA y la serie sale
+#: con otra letra, no es una serie rara: es una mala lectura del OCR, y se
+#: corrige. El titulo es texto grande y se lee bien casi siempre; la serie es
+#: chica y es donde se confunden E/F, P/F, B/8.
+LETRA_OBLIGATORIA = {
+    "FACTURA": "F",
+    "BOLETA": "B",
+}
+
 #: Confusiones tipicas del OCR cuando lo que deberia haber es un DIGITO.
 CONFUSION_A_DIGITO = {
     "O": "0", "Q": "0", "D": "0", "U": "0",
@@ -419,6 +430,61 @@ def _extraer_candidatos(texto: str, tipo_doc: Optional[str]) -> List[NroComproba
 # --------------------------------------------------------------------------
 
 
+def _tipo_normalizado(tipo_doc: Optional[str]) -> Optional[str]:
+    """
+    Acepta cualquier forma de nombrar el tipo y devuelve la canonica.
+    La vista manda la descripcion del catalogo ("FACTURA DE COMPRAS",
+    "BOLETAS DE VENTAS"), el OCR manda "FACTURA" o incluso solo "F".
+    """
+    if not tipo_doc:
+        return None
+    t = normalizar_texto(tipo_doc)
+    if "NOTA" in t and "CREDITO" in t:
+        return "NOTA DE CREDITO"
+    if "NOTA" in t and "DEBITO" in t:
+        return "NOTA DE DEBITO"
+    if "FACTURA" in t or t == "F":
+        return "FACTURA"
+    if "BOLETA" in t or t == "B":
+        return "BOLETA"
+    if "RECIBO" in t or t == "R":
+        return "RECIBO"
+    return None
+
+
+def _forzar_letra_por_tipo(resultado: NroComprobante,
+                           tipo_doc: Optional[str]) -> NroComprobante:
+    """
+    Corrige la primera letra de la serie cuando el tipo de comprobante la
+    determina. Una factura electronica va con F###; si se leyo E003 en un
+    documento que dice FACTURA, la serie correcta es F003.
+
+    No toca series numericas (comprobantes fisicos, 001-000123) ni tipos que
+    admiten varias letras (notas de credito y debito, que heredan la del
+    comprobante que modifican).
+    """
+    if not resultado.ok or not resultado.serie:
+        return resultado
+
+    canonico = _tipo_normalizado(tipo_doc)
+    esperada = LETRA_OBLIGATORIA.get(canonico or "")
+    if not esperada:
+        return resultado
+
+    cabeza = resultado.serie[0]
+    if cabeza == esperada or resultado.serie.isdigit():
+        return resultado
+
+    original = resultado.serie
+    resultado.serie = esperada + resultado.serie[1:]
+    resultado.reparado = True
+    resultado.advertencias.append(
+        f"el documento dice {canonico} y la serie se leyo {original}: "
+        f"corregida a {resultado.serie}, porque SUNAT exige que empiece con "
+        f"{esperada}")
+    return resultado
+
+
 def parse_nro_comprobante(entrada: str,
                           tipo_doc: Optional[str] = None) -> NroComprobante:
     """
@@ -456,7 +522,7 @@ def parse_nro_comprobante(entrada: str,
         )
 
     mejor.confianza = max(0, min(100, mejor.confianza))
-    return mejor
+    return _forzar_letra_por_tipo(mejor, tipo_doc)
 
 
 def formatear_nro_comprobante(entrada: str, tipo_doc: Optional[str] = None) -> Optional[str]:
