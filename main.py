@@ -21,7 +21,8 @@ from app.infrastructure.image_handler import ImageHandler
 from app.ocr.lector import Lector
 from app.network.backend_client import BackendClient
 from app.domain import ScannedDocument
-from app.config import INPUT_FOLDER, PROCESSED_FOLDER, ERROR_FOLDER, SUPPORTED_EXTENSIONS
+from app.config import (INPUT_FOLDER, PROCESSED_FOLDER, ERROR_FOLDER,
+                        SUPPORTED_EXTENSIONS, POPPLER_PATH)
 
 import sys
 sys.stdout.reconfigure(encoding='utf-8')
@@ -44,9 +45,15 @@ image_handler = ImageHandler()
 # anterior (ingles, PSM 6) el RUC del emisor y el importe salian en 0 de 4.
 # Si Tesseract o Poppler no estan en el PATH del servicio, se indican por
 # variable de entorno y no hay que tocar codigo.
+# Poppler sale de app/config.py (variable de entorno POPPLER_PATH, o la ruta
+# de instalacion, o None para que se busque en el PATH). Es la misma fuente
+# que usa image_handler: si el lector la resolviera por su cuenta, en un
+# servidor donde Poppler no esta en el PATH fallarian todas las pasadas de
+# OCR mientras la vista previa seguiria funcionando — que es exactamente lo
+# que paso la primera vez.
 lector = Lector(
     tesseract_cmd=os.environ.get("TESSERACT_CMD"),
-    poppler_path=os.environ.get("POPPLER_PATH"),
+    poppler_path=POPPLER_PATH,
 )
 extractor = DataExtractor()
 mobility = MobilityExtractor()
