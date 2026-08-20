@@ -1,5 +1,5 @@
 import re
-from datetime import datetime
+from datetime import date, datetime, timedelta
 
 # Modulos de campo, cada uno con su propia validacion. Se agregaron sin tocar
 # el resto del extractor: los metodos historicos siguen existiendo y solo
@@ -350,23 +350,67 @@ class DataExtractor:
 
     @staticmethod
     def _extract_date(text: str) -> str | None:
+        """
+        Fecha de emision en ISO.
 
-        m = re.search(r'\b(\d{2})[/-](\d{2})[/-](\d{4})\b', text)
-        if m:
-            d, mth, y = m.groups()
+        Acepta anio de 4 y de 2 digitos: los tickets de caja imprimen
+        "25/06/26" y con el patron anterior, que exigia cuatro digitos, la
+        fecha salia vacia. Se descartan fechas imposibles —futuras o de hace
+        mas de seis anios—, que es como se cuela una mala lectura del OCR.
+        """
+        if not text:
+            return None
+
+        hoy = date.today()
+        mas_viejo = hoy - timedelta(days=365 * 6)
+        mas_nuevo = hoy + timedelta(days=2)      # margen por zona horaria
+
+        def valida(f: date) -> bool:
+            return mas_viejo <= f <= mas_nuevo
+
+        candidatas: list[date] = []
+
+        # dd/mm/aaaa y dd/mm/aa (tambien con - o .)
+        for d_, m_, y_ in re.findall(
+                r'\b(\d{1,2})\s*[/\-.]\s*(\d{1,2})\s*[/\-.]\s*(\d{2,4})\b', text):
             try:
-                return datetime(int(y), int(mth), int(d)).date().isoformat()
-            except:
+                anio = int(y_)
+                if anio < 100:
+                    anio += 2000
+                f = date(anio, int(m_), int(d_))
+                if valida(f):
+                    candidatas.append(f)
+            except ValueError:
+                continue
+
+        # aaaa-mm-dd
+        for y_, m_, d_ in re.findall(r'\b(\d{4})-(\d{2})-(\d{2})\b', text):
+            try:
+                f = date(int(y_), int(m_), int(d_))
+                if valida(f):
+                    candidatas.append(f)
+            except ValueError:
+                continue
+
+        if not candidatas:
+            return None
+
+        # La fecha etiquetada manda; si no hay etiqueta, la primera valida.
+        etiquetada = re.search(
+            r'FECHA\s*(?:DE\s*)?EMISION\s*[:\.]?\s*(\d{1,2})\s*[/\-.]\s*'
+            r'(\d{1,2})\s*[/\-.]\s*(\d{2,4})', text, re.IGNORECASE)
+        if etiquetada:
+            try:
+                anio = int(etiquetada.group(3))
+                if anio < 100:
+                    anio += 2000
+                f = date(anio, int(etiquetada.group(2)), int(etiquetada.group(1)))
+                if valida(f):
+                    return f.isoformat()
+            except ValueError:
                 pass
 
-        m = re.search(r'\b(\d{4})-(\d{2})-(\d{2})\b', text)
-        if m:
-            try:
-                return datetime.strptime(m.group(0), "%Y-%m-%d").date().isoformat()
-            except:
-                pass
-
-        return None
+        return candidatas[0].isoformat()
 
     @staticmethod
     def _extract_address(text: str) -> str | None:

@@ -73,7 +73,17 @@ ETIQUETAS_TOTAL = (
     r"\bTOTAL\b",
 )
 
-ETIQUETA_GRAVADO = r"(?:TOTAL\s+)?VALOR\s+VENTA\s+GRAVAD[OA]|OP\.?\s*GRAVADAS?|SUB\s*-?\s*TOTAL"
+#: Etiquetas del valor gravado, EN ORDEN DE PREFERENCIA. El orden importa:
+#: en los tickets de supermercado "SUBTOTAL" es el total CON IGV, mientras que
+#: el gravado real esta en "OP. GRAVADA". Si se toma el subtotal como gravado,
+#: la tasa de IGV sale mal y la verificacion cruzada reporta un falso error.
+ETIQUETAS_GRAVADO = (
+    r"OP\.?\s*GRAVADAS?",
+    r"OPERACION(?:ES)?\s+GRAVADAS?",
+    r"(?:TOTAL\s+)?VALOR\s+VENTA\s+GRAVAD[OA]",
+    r"BASE\s+IMPONIBLE",
+    r"SUB\s*-?\s*TOTAL",
+)
 ETIQUETA_IGV = r"(?:SUMATORIA\s+)?I\.?G\.?V\.?"
 ETIQUETA_CARGOS = r"SUMATORIA\s+OTROS\s+CARGOS"
 ETIQUETA_ISC = r"SUMATORIA\s+ISC"
@@ -166,9 +176,35 @@ def _palabras_a_entero(palabras: List[str]) -> Optional[int]:
     return total + parcial
 
 
+def _numerales_finales(palabras: List[str]) -> List[str]:
+    """
+    Se queda con las ultimas palabras que son numerales.
+
+    En un ticket la linea del monto en letras viene pegada a otras cosas
+    ("TARJ BANC TREINTA Y CINCO Y 70/100"), asi que se recorre desde el final
+    hacia atras mientras las palabras sigan siendo parte del numero.
+    """
+    vocabulario = set(UNIDADES) | set(DECENAS) | set(CENTENAS) | {
+        "Y", "CON", "MIL", "MILES", "MILLON", "MILLONES"}
+
+    fin = len(palabras)
+    ini = fin
+    while ini > 0 and palabras[ini - 1] in vocabulario:
+        ini -= 1
+
+    numerales = palabras[ini:fin]
+    # "Y" suelto al inicio no aporta
+    while numerales and numerales[0] in ("Y", "CON"):
+        numerales.pop(0)
+    return numerales
+
+
 def parse_monto_en_letras(texto: str) -> Optional[float]:
     """
-    Lee la linea "SON: CUARENTA Y NUEVE Y 20/100 SOLES" y devuelve 49.20.
+    Lee el importe escrito en palabras y lo devuelve como numero:
+
+        SON: CUARENTA Y NUEVE Y 20/100 SOLES   ->  49.20
+        TREINTA Y CINCO Y 70/100 SOLES         ->  35.70   (tickets, sin "SON")
 
     Es la verificacion independiente mas valiosa que trae el documento: son
     palabras largas, que el OCR lee mucho mejor que una columna de cifras
@@ -179,26 +215,38 @@ def parse_monto_en_letras(texto: str) -> Optional[float]:
 
     t = normalizar(texto)
 
-    m = re.search(
-        r"\bSON\s*[:\-]?\s*(.{3,180}?)(\d{1,2})\s*/\s*100",
-        t, re.DOTALL,
-    )
-    if not m:
-        # variante sin centavos: "SON: CIEN SOLES"
-        m2 = re.search(r"\bSON\s*[:\-]?\s*(.{3,180}?)\s+(?:SOLES|NUEVOS\s+SOLES|DOLARES)", t, re.DOTALL)
-        if not m2:
-            return None
-        entero = _palabras_a_entero(re.findall(r"[A-Z]+", m2.group(1)))
-        return float(entero) if entero is not None else None
+    # Todas las apariciones de "NN/100" son candidatas. Se prefiere la que
+    # viene precedida de "SON", y si no hay, cualquiera cuyas palabras previas
+    # formen un numero.
+    candidatos = []
+    for m in re.finditer(r"(.{0,140}?)(\d{1,2})\s*/\s*100", t, re.DOTALL):
+        previo, centavos = m.group(1), int(m.group(2))
+        con_son = "SON" in previo[-60:]
 
-    palabras = re.findall(r"[A-Z]+", m.group(1))
-    centavos = int(m.group(2))
+        # el texto entre "SON" y el "NN/100", o los ultimos 140 caracteres
+        trozo = previo.rsplit("SON", 1)[-1] if con_son else previo
+        palabras = _numerales_finales(re.findall(r"[A-Z]+", trozo))
+        if not palabras:
+            continue
 
-    entero = _palabras_a_entero(palabras)
-    if entero is None:
-        return None
+        entero = _palabras_a_entero(palabras)
+        if entero is None:
+            continue
+        candidatos.append((con_son, round(entero + centavos / 100.0, 2)))
 
-    return round(entero + centavos / 100.0, 2)
+    if candidatos:
+        con_son = [v for marcado, v in candidatos if marcado]
+        return con_son[0] if con_son else candidatos[0][1]
+
+    # variante sin centavos: "SON: CIEN SOLES"
+    m2 = re.search(r"\bSON\s*[:\-]?\s*(.{3,180}?)\s+(?:SOLES|NUEVOS\s+SOLES|DOLARES)",
+                   t, re.DOTALL)
+    if m2:
+        entero = _palabras_a_entero(_numerales_finales(re.findall(r"[A-Z]+", m2.group(1))))
+        if entero is not None:
+            return float(entero)
+
+    return None
 
 
 # --------------------------------------------------------------------------
@@ -276,7 +324,10 @@ def extraer_montos(texto: str) -> Montos:
     t = normalizar(texto)
     m.moneda = detectar_moneda(t)
 
-    m.gravado = _buscar_etiquetado(t, ETIQUETA_GRAVADO)
+    for etiqueta in ETIQUETAS_GRAVADO:
+        m.gravado = _buscar_etiquetado(t, etiqueta)
+        if m.gravado is not None:
+            break
     m.igv = _buscar_etiquetado(t, ETIQUETA_IGV)
     m.otros_cargos = _buscar_etiquetado(t, ETIQUETA_CARGOS)
     m.isc = _buscar_etiquetado(t, ETIQUETA_ISC)
