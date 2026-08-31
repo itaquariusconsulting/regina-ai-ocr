@@ -106,7 +106,21 @@ PREFIJOS_PROHIBIDOS = (
     "RUC", "R.U.C", "DNI", "TELF", "TELEFONO", "CEL", "CELULAR",
     "CUENTA", "CTA", "CCI", "IGV", "TOTAL", "SUBTOTAL", "FECHA",
     "HORA", "CAJA", "MESA", "PEDIDO", "ORDEN", "GUIA",
+    # El rotulo real termina en la ultima palabra, no en la primera:
+    # "GUIA DE REMISION: T003-6341" no termina en "GUIA", termina en
+    # "REMISION". Con solo "GUIA" en la lista, el numero de la guia pasaba
+    # el filtro y ganaba: en la factura F003-11082 de CONSORCIO JF NORTE se
+    # guardo T003-6341, que ademas arrastraba el tipo de documento a boleta.
+    "REMISION", "REMITENTE", "COMPRA", "COTIZACION", "PROFORMA",
+    "VENCIMIENTO", "REFERENCIA", "PLACA",
 )
+
+#: Letras de serie que NO pertenecen a un comprobante de pago.
+#:
+#: La guia de remision electronica lleva serie T###. No es un comprobante y
+#: nunca es lo que hay que mandar a SUNAT, pero convive con la factura en la
+#: misma hoja y con el mismo formato serie-numero.
+LETRAS_DE_OTRO_DOCUMENTO = {"T"}
 
 #: Palabras que suben el puntaje si aparecen cerca del candidato.
 PALABRAS_TITULO = (
@@ -336,7 +350,12 @@ def _puntuar(base: int, texto: str, ini: int, fin: int, serie: str,
              numero: str, reparado: bool, tipo_doc: Optional[str]) -> int:
     puntaje = base
 
-    if serie and serie[0] in LETRAS_SERIE_VALIDAS:
+    if serie and serie[0] in LETRAS_DE_OTRO_DOCUMENTO:
+        # Una serie T### es de guia de remision. Se castiga fuerte en vez de
+        # descartarla del todo para no romper el caso raro en que la guia sea
+        # el unico candidato legible y el usuario decida corregir a mano.
+        puntaje -= 40
+    elif serie and serie[0] in LETRAS_SERIE_VALIDAS:
         puntaje += 12
     elif serie.isdigit():
         puntaje -= 5
