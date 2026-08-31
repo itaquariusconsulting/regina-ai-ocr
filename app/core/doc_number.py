@@ -115,6 +115,19 @@ PREFIJOS_PROHIBIDOS = (
     "VENCIMIENTO", "REFERENCIA", "PLACA",
 )
 
+#: Palabras que delatan un numero de cuenta bancaria y no un comprobante.
+#:
+#: No alcanza con mirar el prefijo inmediato: entre la etiqueta y el numero
+#: suele haber otro numero, como en
+#: "BBVA 0011-0921-0200289711 CCI 011-921-000200289711-40", donde el
+#: candidato viene precedido por digitos y no por la palabra CCI. Por eso se
+#: buscan en la ventana de alrededor y no solo antes.
+CONTEXTO_BANCARIO = (
+    "CCI", "CTACTE", "CTACORRIENTE", "CUENTA", "INTERBANCARIA",
+    "INTERBANCARIO", "SCOTIABANK", "INTERBANK", "BANCO", "BBVA", "BCP",
+    "BANBIF", "PICHINCHA", "DEPOSITO", "ABONO",
+)
+
 #: Letras de serie que NO pertenecen a un comprobante de pago.
 #:
 #: La guia de remision electronica lleva serie T###. No es un comprobante y
@@ -331,6 +344,17 @@ def _es_falso_positivo(texto: str, ini: int, fin: int, serie: str, numero: str) 
 
     if len(numero) == 11 and numero.startswith(("10", "15", "17", "20")):
         return "parece un RUC"
+
+    # Numeros de cuenta y CCI del pie de pagina. Solo se descartan los
+    # candidatos de serie totalmente numerica: un comprobante electronico
+    # lleva letra (F003, B001, E001), asi que esta regla no puede tapar uno
+    # bueno aunque el emisor sea un banco.
+    if serie.isdigit():
+        alrededor = _contexto(texto, ini, fin, 34)
+        alrededor = alrededor.replace(".", "").replace(":", "").replace(" ", "")
+        for palabra in CONTEXTO_BANCARIO:
+            if palabra in alrededor:
+                return f"numero de cuenta ({palabra} cerca)"
 
     # fechas: 19-08-2026 / 19/08/2026
     ventana = _contexto(texto, ini, fin, 6)
