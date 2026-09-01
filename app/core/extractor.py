@@ -212,25 +212,58 @@ class DataExtractor:
 
         return 0.0
 
+    #: Como se reconoce cada tipo. Por cada uno, el TITULO del documento y la
+    #: mencion suelta de la palabra. El orden de la tupla no decide nada: lo
+    #: que decide es cual aparece primero en la hoja.
+    _TIPOS = (
+        ("N", r"NOTA\s*DE\s*(?:CREDITO|DEBITO)", r"\bN\s?O\s?T\s?A\b"),
+        ("R", r"RECIBO\s*POR\s*HONORARIOS",      r"\bR\s?E\s?C\s?I\s?B\s?O\b"),
+        ("B", r"BOLETA\s*(?:DE\s*VENTA|ELECTRONICA)", r"\bB\s?O\s?L\s?E\s?T\s?A\b"),
+        ("F", r"FACTURA\s*(?:ELECTRONICA|COMERCIAL)?", r"\bF\s?A\s?C\s?T\s?U\s?R\s?A\b"),
+    )
+
     @staticmethod
     def _determine_type(text: str) -> str:
+        """
+        Que clase de comprobante es.
+
+        Un titulo le gana a una mencion suelta, y entre dos titulos gana el
+        que aparece mas arriba en la hoja.
+
+        Antes esto era una cadena de `if` con `in`, evaluada en orden fijo con
+        BOLETA antes que FACTURA. Las facturas de bsale traen al pie
+        "Consulta tu boleta en https://tuboleta.bsale.com.pe": la URL se
+        limpia, pero la palabra "boleta" de la frase queda, y esa mencion
+        perdida al final de la hoja le ganaba al "FACTURA ELECTRONICA" del
+        encabezado. Toda factura de ese emisor entraba como boleta, y el
+        formulario preseleccionaba "BV POR COMPRAS" para un RUC 20, que
+        despues no valida.
+        """
         text = re.sub(r'\S+@\S+', '', text)
 
         text = re.sub(r'WWW\.\S+|HTTP\S+', '', text, flags=re.IGNORECASE)
 
         t = text.upper()
 
-        if "NOTA DE CREDITO" in t or "NOTA" in t or "N O T A" in t:
-            return "N"
+        # Primera vuelta: titulos. Es la evidencia fuerte, la que esta en el
+        # recuadro de la cabecera.
+        titulos = []
+        for codigo, titulo, _ in DataExtractor._TIPOS:
+            m = re.search(titulo, t)
+            if m:
+                titulos.append((m.start(), codigo))
+        if titulos:
+            return min(titulos)[1]
 
-        if "RECIBO POR HONORARIOS" in t or "RECIBO" in t or "R E C I B O" in t:
-            return "R"
-
-        if "BOLETA DE VENTA" in t or "BOLETA" in t or "B O L E T A" in t:
-            return "B"
-
-        if "FACTURA ELECTRONICA" in t or "FACTURA" in t or "F A C T U R A" in t:
-            return "F"
+        # Segunda vuelta: la palabra suelta, tolerando el espaciado que mete
+        # el OCR en los titulos grandes ("F A C T U R A").
+        sueltas = []
+        for codigo, _, palabra in DataExtractor._TIPOS:
+            m = re.search(palabra, t)
+            if m:
+                sueltas.append((m.start(), codigo))
+        if sueltas:
+            return min(sueltas)[1]
 
         return "X"
 
